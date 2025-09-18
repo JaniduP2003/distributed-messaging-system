@@ -1,0 +1,206 @@
+Detailed Code Analysis of Fault Tolerance Implementation
+====================================================
+
+1. Failover Class Initialization
+//The system maintains a set of healthy nodes and tracks their status
+failover.py
+-------------------------------
+```python
+class Failover:
+    def __init__(self, cluster_nodes):
+        self.cluster_nodes = cluster_nodes        # List of all nodes in the cluster
+        self.current_leader = None                # Tracks the current leader node
+        self.healthy_nodes = set(cluster_nodes)   # Set of currently healthy nodes
+        self.stop_event = threading.Event()       # Event for graceful shutdown
+        self.monitor_thread = None                # Thread for health monitoring
+        self.health_check_interval = 3            # Check interval in seconds
+```
+
+Function Call Flow:
+- Called when initializing a new Failover instance
+- Typically called from server_cluster.py during server initialization
+- Sets up initial state for failover monitoring
+
+2. Node Health Monitoring  // TCP-based Health Checks
+failover.py
+------------------------
+```python
+def _check_node_health(self):
+    for node_addr in self.cluster_nodes:          # Iterate through all cluster nodes
+        healthy = self._is_node_alive(node_addr)  # Check if node is responsive
+        
+        # Node has recovered
+        if healthy and node_addr not in self.healthy_nodes:
+            self.healthy_nodes.add(node_addr)     # Add to healthy nodes set
+            logger.info(f"Node {node_addr} is now healthy")
+        
+        # Node has failed
+        elif not healthy and node_addr in self.healthy_nodes:
+            self.healthy_nodes.remove(node_addr)  # Remove from healthy nodes set
+            logger.warning(f"Node {node_addr} appears to be down")
+```
+
+Function Call Flow:
+- Called periodically by _monitor_cluster()
+- Called every health_check_interval (3 seconds)
+- Updates the healthy_nodes set based on node status
+
+3. Node Alive Check // TCP-based Health Checks
+failover.py
+------------------
+```python
+def _is_node_alive(self, node_addr):
+    try:
+        # Parse node address into host and port
+        host, port = node_addr.split(':')
+        
+        # Create TCP socket for connection test
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(2)                       # Set 2-second timeout
+            s.connect((host, int(port)))          # Attempt connection
+            return True                           # Connection successful
+    except Exception:
+        return False                              # Connection failed
+```
+
+Function Call Flow:
+- Called by _check_node_health() for each node
+- Used to determine if a node is responsive
+- Returns boolean indicating node health
+
+4. Cluster Monitoring // Automatic Failover Detection
+failover.py
+--------------------
+```python
+def _monitor_cluster(self):
+    while not self.stop_event.is_set():           # Continue until stopped
+        try:
+            # Update health status of all nodes
+            self._check_node_health()
+            
+            # Check leader status
+            try:
+                leader = raftos.get_leader()      # Get current leader from Raft
+                
+                # Leader has changed
+                if leader != self.current_leader:
+                    if self.current_leader is not None:
+                        logger.info(f"Leader changed from {self.current_leader} to {leader}")
+                    else:
+                        logger.info(f"Initial leader is {leader}")
+                    
+                    self.current_leader = leader  # Update current leader
+                
+                # Leader is not healthy
+                if leader and leader not in self.healthy_nodes:
+                    logger.warning(f"Leader {leader} appears to be down, waiting for new election")
+            except Exception as e:
+                logger.error(f"Error checking leader status: {e}")
+            
+        except Exception as e:
+            logger.error(f"Error in failover monitoring: {e}")
+        
+        # Wait before next check
+        self.stop_event.wait(self.health_check_interval)
+```
+
+Function Call Flow:
+- Started as a background thread when failover monitoring begins
+- Runs continuously until stop_event is set
+- Integrates with Raft consensus for leader status
+
+5. Client Reconnection  //Client Reconnection Logic
+client.py
+---------------------
+```python
+def reconnect(self):
+    # Clean up existing connection
+    if self.client_socket:
+        try:
+            self.client_socket.close()
+        except:
+            pass
+        self.client_socket = None
+    
+    logger.info("Attempting to reconnect...")
+    if self.connect():                           # Try to connect to any server
+        # Handle successful reconnection
+        if self.username:
+            # Resend login message
+            self.send_message("login", f"{self.username} has joined the chat")
+            
+            # Resend queued messages
+            with self.message_lock:
+                for msg_type, content in self.message_queue:
+                    self.send_message(msg_type, content)
+                self.message_queue.clear()
+            
+            return True
+    
+    return False
+```
+
+Function Call Flow:
+- Called when client detects connection loss
+- Attempts to reconnect to any available server
+- Preserves user session and message queue
+
+6. Server Integration
+clusterserver.py
+--------------------
+```python
+class ClusterServer:
+    def __init__(self, cluster_nodes, node_id):
+        # Initialize failover and consensus
+        self.failover = Failover(cluster_nodes)
+        self.consensus = Consensus(cluster_nodes)
+```
+
+Function Call Flow:
+- Called during server initialization
+- Sets up failover and consensus mechanisms
+- Integrates with the server's main functionality
+
+7. Message Storage Integration
+----------------------------
+```python
+class MessageStorage:
+    def __init__(self):
+        # Initialize replicated storage
+        self.messages = raftos.ReplicatedDict(name="messages")
+        self.message_index = raftos.ReplicatedList(name="message_index")
+```
+
+Function Call Flow:
+- Called during storage initialization
+- Sets up distributed storage using Raft
+- Ensures message persistence across nodes
+
+Key Integration Points:
+1. Server Initialization:
+   - Failover system is initialized with cluster nodes
+   - Monitoring thread is started
+   - Health checks begin
+
+2. Client Connection:
+   - Client attempts to connect to any server
+   - If connection fails, reconnection logic is triggered
+   - Session is preserved during reconnection
+
+3. Message Handling:
+   - Messages are stored in replicated storage
+   - Raft consensus ensures consistency
+   - Failover system monitors node health
+
+4. Node Failure:
+   - Health checks detect failed nodes
+   - Failed nodes are removed from healthy set
+   - Leader election is triggered if needed
+   - Clients reconnect to healthy nodes
+
+This implementation ensures:
+- Continuous monitoring of node health
+- Automatic failover handling
+- Seamless client reconnection
+- Data consistency across nodes
+- High availability of the system 

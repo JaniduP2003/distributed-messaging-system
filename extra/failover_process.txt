@@ -1,0 +1,31 @@
+Failover Process Flow
+====================
+
+The process begins with the Failover class (src/failover/failover.py)
+performing TCP-based health checks on all cluster nodes every 3 seconds,
+using a 2-second timeout to quickly detect unresponsive nodes.
+
+When a node fails to respond within this timeout, it's immediately removed from the healthy_nodes set,
+triggering the failover process. Simultaneously, the Client class (src/client.py)
+implements its own connection management with a more lenient 5-second timeout,
+allowing for better handling of slow network conditions.
+ 
+If a client's current server becomes unresponsive,
+the client automatically attempts to reconnect to other healthy nodes in the cluster,
+waiting 3 seconds between retry attempts if all servers are temporarily unavailable.
+The system also integrates with Raft consensus (src/consensus/consensus.py)
+to handle leader election when the current leader node fails,
+ensuring continuous operation of the cluster.
+
+This multi-layered approach combines quick server-side health
+detection with graceful client reconnection, while maintaining data consistency through
+the consensus mechanism. The failover process is completely automatic and transparent
+to end users, with the system automatically recovering when failed nodes become
+responsive again, as they are automatically re-added to the healthy_nodes set after
+passing subsequent health checks.
+
+This comprehensive failover strategy ensures
+high availability and fault tolerance, with different timeout
+values (2 seconds for health checks, 5 seconds for client connections)
+optimized for their specific purposes, and regular health check intervals (3 seconds)
+providing a balance between responsiveness and system load. 

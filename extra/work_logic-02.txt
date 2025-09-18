@@ -1,0 +1,204 @@
+Fault Tolerance Techniques in Distributed Messaging System
+=====================================================
+
+1. TCP-based Health Checks
+-------------------------
+The system uses TCP connection checks to monitor node health and detect failures.
+
+Code Implementation (from failover.py):
+```python
+def _is_node_alive(self, node_addr):
+    """
+    Check if a node is responsive using TCP connection
+    """
+    try:
+        host, port = node_addr.split(':')
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(2)  # 2-second timeout for connection attempts
+            s.connect((host, int(port)))
+            return True
+    except Exception:
+        return False
+
+def _check_node_health(self):
+    """
+    Monitor health of all cluster nodes
+    """
+    for node_addr in self.cluster_nodes:
+        healthy = self._is_node_alive(node_addr)
+        if healthy and node_addr not in self.healthy_nodes:
+            self.healthy_nodes.add(node_addr)
+            logger.info(f"Node {node_addr} is now healthy")
+        elif not healthy and node_addr in self.healthy_nodes:
+            self.healthy_nodes.remove(node_addr)
+            logger.warning(f"Node {node_addr} appears to be down")
+```
+
+2. Automatic Failover Detection
+------------------------------
+The system automatically detects node failures and handles failover scenarios.
+
+Code Implementation (from failover.py):
+```python
+def _monitor_cluster(self):
+    """
+    Monitor cluster health and handle failovers
+    """
+    while not self.stop_event.is_set():
+        try:
+            # Update node health status
+            self._check_node_health()
+            
+            # Check current leader
+            try:
+                leader = raftos.get_leader()
+                
+                if leader != self.current_leader:
+                    if self.current_leader is not None:
+                        logger.info(f"Leader changed from {self.current_leader} to {leader}")
+                    else:
+                        logger.info(f"Initial leader is {leader}")
+                    
+                    self.current_leader = leader
+                
+                # Check if leader is responsive
+                if leader and leader not in self.healthy_nodes:
+                    logger.warning(f"Leader {leader} appears to be down, waiting for new election")
+            except Exception as e:
+                logger.error(f"Error checking leader status: {e}")
+            
+        except Exception as e:
+            logger.error(f"Error in failover monitoring: {e}")
+        
+        # Sleep before next check
+        self.stop_event.wait(self.health_check_interval)
+```
+
+3. Client Reconnection Logic
+---------------------------
+Clients automatically reconnect to healthy nodes when their current server fails.
+
+Code Implementation (from client.py):
+```python
+def reconnect(self):
+    """
+    Attempt to reconnect to any available server
+    """
+    if self.client_socket:
+        try:
+            self.client_socket.close()
+        except:
+            pass
+        self.client_socket = None
+    
+    logger.info("Attempting to reconnect...")
+    if self.connect():
+        # Reconnected successfully, resend login
+        if self.username:
+            self.send_message("login", f"{self.username} has joined the chat")
+            
+            # Resend any queued messages
+            with self.message_lock:
+                for msg_type, content in self.message_queue:
+                    self.send_message(msg_type, content)
+                self.message_queue.clear()
+            
+            return True
+    
+    return False
+
+def connect(self):
+    """
+    Connect to any available server in the cluster
+    """
+    while self.running and not self.connected:
+        for server in self.cluster_servers:
+            try:
+                host, port = server.split(':')
+                self.client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                self.client_socket.settimeout(5)
+                self.client_socket.connect((host, int(port)))
+                
+                self.connected = True
+                self.current_server = server
+                logger.info(f"Connected to server {server}")
+                return True
+            except Exception as e:
+                logger.warning(f"Unable to connect to server {server}: {e}")
+```
+
+4. Redundant Server Nodes
+------------------------
+The system maintains multiple server nodes for redundancy and high availability.
+
+Code Implementation (from server_cluster.py):
+```python
+class ClusterServer:
+    def __init__(self, cluster_nodes, node_id):
+        """
+        Initialize a cluster server node
+        """
+        self.cluster_nodes = cluster_nodes
+        self.node_id = node_id
+        self.node_addr = cluster_nodes[node_id]
+        
+        # Configure raftos for consensus
+        raftos.configure({
+            'log_path': log_dir,
+            'serializer': raftos.serializers.JSONSerializer
+        })
+        
+        # Register this node with raftos
+        raftos.register(self.host, self.port)
+        
+        # Register other nodes
+        for i, addr in enumerate(cluster_nodes):
+            if i != node_id:  # Skip self
+                host, port = addr.split(':')
+                raftos.register(host, int(port))
+```
+
+5. Health Status Tracking
+------------------------
+The system maintains a set of healthy nodes and tracks their status.
+
+Code Implementation (from failover.py):
+```python
+class Failover:
+    def __init__(self, cluster_nodes):
+        """
+        Initialize the failover handler
+        """
+        self.cluster_nodes = cluster_nodes
+        self.current_leader = None
+        self.healthy_nodes = set(cluster_nodes)
+        self.stop_event = threading.Event()
+        self.monitor_thread = None
+        self.health_check_interval = 3  # seconds
+
+    def get_healthy_nodes(self):
+        """
+        Get a list of currently healthy nodes
+        """
+        return list(self.healthy_nodes)
+
+    def get_leader(self):
+        """
+        Get the current leader node
+        """
+        return self.current_leader
+```
+
+These fault tolerance techniques work together to ensure:
+1. Continuous monitoring of node health
+2. Automatic detection of node failures
+3. Seamless client reconnection to healthy nodes
+4. Redundant server nodes for high availability
+5. Real-time tracking of cluster health status
+
+The system maintains high availability by:
+- Using TCP health checks to detect node failures
+- Automatically handling failover scenarios
+- Providing client reconnection mechanisms
+- Maintaining redundant server nodes
+- Tracking and updating node health status 

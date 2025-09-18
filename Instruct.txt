@@ -1,0 +1,49 @@
+
+
+.\venv\scripts\activate
+
+01. Run the server.py file
+02. in new terminals, run the backup server
+            python server.py --host localhost --port 5001
+            python server.py --host localhost --port 5002
+03. run client instances in seperate terminals
+            python client.py
+
+when running, terminal path should be in src folder
+
+IT23184558 - D B Y BINUWARA - Fault tolerance
+
+                  Class: Failover
+                  Detects failed nodes using TCP checks (_is_node_alive and _check_node_health)
+                  Handles automatic failover and maintains a list of healthy nodes.
+
+                  Class: ClusterServer
+                  Integrates Failover and starts/stops it with the server.
+                  Handles client reconnections after failover.
+
+                  Class: MessageClient
+                  Implements reconnection logic to switch to another server if the current one fails (reconnect, connect).
+
+IT23294998 - PABASARA T D J - Time Synchronization
+                  Class: TimeSync
+                  Synchronizes server time using NTP servers.
+                  Provides synchronized timestamps for message events.
+                  Both servers use TimeSync to timestamp messages and events.
+
+IT23398184 - DINUJAYA K V T - Data Replication & Consistency
+                  File: message_storage/storage.py
+                  Class: MessageStorage
+                  Uses raftos.ReplicatedDict and ReplicatedList for distributed, replicated storage.
+                  Ensures strong consistency and deduplication (unique message IDs).
+                  Provides APIs for storing, retrieving, and deleting messages.
+                  Both servers instantiate and use MessageStorage for all message operations.
+
+IT23424432 - ABEYRATHNA J G D A - Consensus Implementation
+                  File: consensus/consensus.py (imported in paste-2.txt)
+                  Class: Consensus
+                  Manages Raft consensus, leader election, and monitors leadership status.
+                  Ensures all nodes agree on the state and message order.
+                  
+                  Class: ClusterServer
+                  Integrates and starts the Consensus component.
+                  Configures and registers nodes with Raft (raftos).

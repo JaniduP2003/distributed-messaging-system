@@ -1,0 +1,184 @@
+Overall System Work Logic
+========================
+
+The distributed messaging system is built with a client-server architecture using a cluster of servers for high availability and fault tolerance. Here's how the system works:
+
+1. System Components:
+   - Server Cluster (Multiple server nodes)
+   - Client Application
+   - Distributed Storage
+   - Consensus Mechanism
+   - Time Synchronization
+   - Failover System
+
+2. File Structure and Flow:
+   - src/
+     ├── server.py (Main server implementation)
+     ├── server_cluster.py (Cluster management)
+     ├── client.py (Client implementation)
+     ├── failover/
+     │   └── failover.py (Fault tolerance handling)
+     ├── consensus/
+     │   └── consensus.py (Raft consensus implementation)
+     ├── time_sync/
+     │   └── timesync.py (NTP time synchronization)
+     └── message_storage/
+         └── storage.py (Distributed message storage)
+
+3. System Flow:
+   a. Server Initialization:
+      - Server nodes start up and register with the cluster
+      - Time synchronization is established
+      - Raft consensus is initialized
+      - Failover monitoring begins
+   
+   b. Client Connection:
+      - Client connects to any available server
+      - Server authenticates and registers client
+      - Client joins the messaging system
+   
+   c. Message Handling:
+      - Messages are stored in distributed storage
+      - Consensus ensures message consistency
+      - Time synchronization provides accurate timestamps
+      - Failover system monitors node health
+
+Techniques Used
+==============
+
+1. Fault Tolerance:
+   - TCP-based health checks for node monitoring
+   - Automatic failover detection and handling
+   - Client reconnection logic
+   - Redundant server nodes
+   - Health status tracking of cluster nodes
+
+2. Consensus:
+   - Raft consensus algorithm implementation
+   - Leader election mechanism
+   - State replication across nodes
+   - Quorum-based decision making
+   - Log consistency maintenance
+
+3. Data Replication:
+   - Raft-based replicated storage
+   - ReplicatedDict for message storage
+   - ReplicatedList for message indexing
+   - Atomic operations for consistency
+   - Distributed state management
+
+4. Time Synchronization:
+   - NTP protocol implementation
+   - Multiple NTP server fallbacks
+   - Periodic time synchronization
+   - Offset calculation and adjustment
+   - Consistent timestamp generation
+
+Failover Logic
+=============
+
+The failover system (failover.py) implements automatic failover detection and handling:
+
+1. Core Components:
+   ```python
+   class Failover:
+       def __init__(self, cluster_nodes):
+           self.cluster_nodes = cluster_nodes
+           self.current_leader = None
+           self.healthy_nodes = set(cluster_nodes)
+           self.stop_event = threading.Event()
+           self.monitor_thread = None
+           self.health_check_interval = 3  # seconds
+   ```
+
+2. Key Functions:
+   a. Node Health Monitoring:
+   ```python
+   def _check_node_health(self):
+       for node_addr in self.cluster_nodes:
+           healthy = self._is_node_alive(node_addr)
+           if healthy and node_addr not in self.healthy_nodes:
+               self.healthy_nodes.add(node_addr)
+           elif not healthy and node_addr in self.healthy_nodes:
+               self.healthy_nodes.remove(node_addr)
+   ```
+
+   b. Node Alive Check:
+   ```python
+   def _is_node_alive(self, node_addr):
+       try:
+           host, port = node_addr.split(':')
+           with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+               s.settimeout(2)
+               s.connect((host, int(port)))
+               return True
+       except Exception:
+           return False
+   ```
+
+3. Failover Flow:
+   - Continuous monitoring of all cluster nodes
+   - TCP connection checks every 3 seconds
+   - Automatic removal of failed nodes from healthy set
+   - Leader status tracking and updates
+   - Thread-safe operations with proper locking
+
+Overall Failover
+==============
+
+The failover system is integrated throughout the codebase:
+
+1. Server Integration:
+   ```python
+   # In server_cluster.py
+   def __init__(self, cluster_nodes, node_id):
+       # Initialize components
+       self.failover = Failover(cluster_nodes)
+       self.consensus = Consensus(cluster_nodes)
+   ```
+
+2. Client Failover Handling:
+   ```python
+   # In client.py
+   def reconnect(self):
+       if self.client_socket:
+           try:
+               self.client_socket.close()
+           except:
+               pass
+           self.client_socket = None
+       
+       logger.info("Attempting to reconnect...")
+       if self.connect():
+           # Reconnected successfully, resend login
+           if self.username:
+               self.send_message("login", f"{self.username} has joined the chat")
+   ```
+
+3. Message Storage Integration:
+   ```python
+   # In message_storage/storage.py
+   class MessageStorage:
+       def __init__(self):
+           # Initialize replicated storage for messages
+           self.messages = raftos.ReplicatedDict(name="messages")
+           self.message_index = raftos.ReplicatedList(name="message_index")
+   ```
+
+4. Failover Flow:
+   a. Node Failure Detection:
+      - TCP health checks detect failed nodes
+      - Failed nodes are removed from healthy set
+      - Leader status is updated if needed
+   
+   b. Client Reconnection:
+      - Clients detect connection loss
+      - Automatic reconnection to healthy nodes
+      - Message queue preservation
+      - Session recovery
+   
+   c. Data Consistency:
+      - Raft consensus ensures data consistency
+      - Replicated storage maintains data across nodes
+      - Message ordering is preserved
+      - No data loss during failover 
